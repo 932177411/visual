@@ -1,0 +1,573 @@
+---
+title: "COVID-19 Detailed Visualization"
+output:
+  flexdashboard::flex_dashboard:
+    storyboard: true
+    vertical_layout: scroll
+    theme: flatly
+    html_document: 6
+author: AN Hongyu
+---
+Page 1 Introduction {data-icon="fa-table"}
+======================================
+### Introduction
+The current situation: As we can see right now, there are more than 20.9 million accumulative confirmed cases across the world, of which over 7.4 million have not been cured yet. The whole world is fighting aganist the highly contagious virus that is threatening us all and we can’t assure when the turning point will be, but, please, stay calm and stay safe, we will definitely beat it.
+Something about the visualization: For the interactive plots and quick search datatable, the orignal ideas are from jiaying-Wu: https://jiaying-wu.github.io/COVID-19.github.io/
+Framework of this storyboard: I simply broke it into 4 parts, which are in order a brief introduction of the storyboard, data wrangling process, analysis and visualization of COVID-19 globally in general, analysis and visualization of COVID-19 in some representative countries/regions.
+
+### Importing related data
+The data about COVID-19 is from https://www.kaggle.com/sudalairajkumar/novel-corona-virus-2019-dataset
+
+The data about country code is from https://github.com/plotly/datasets/blob/master/2014_world_gdp_with_codes.csv
+
+```{r , echo=FALSE}
+library(flexdashboard)
+computevariable= function(...) return(8)
+```
+### variable
+
+```{r , echo=FALSE}
+variable = computevariable()
+valueBox(variable, icon = "fa-pencil")
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(tidyverse)
+library(plotly)
+library(ggthemes)
+library(gganimate)
+library(geosphere)
+library(DT)
+library(scales)
+library(openair)
+library(corrplot)
+library(viridisLite)
+library(viridis)
+library(RColorBrewer)
+library(ggdark)
+```
+
+
+Page 2 COVID-19 whole world {data-icon="fa-signal"}
+======================================
+### The latest news about COVID-19,What is going on right now with the whole world?
+
+```{r,echo=FALSE}
+ts_confirmed <- read_csv(file = "C:/Users/93217/Desktop/hu/time_series_covid_19_confirmed.csv",
+                         col_types = cols(
+                           .default = col_double(),
+                           `Province/State` = col_character(),
+                           `Country/Region` = col_character()
+                         ))
+
+ts_recovered <- read_csv(file = "C:/Users/93217/Desktop/hu/time_series_covid_19_recovered.csv",
+                         col_types = cols(
+                           .default = col_double(),
+                           `Province/State` = col_character(),
+                           `Country/Region` = col_character()
+                         ))
+
+ts_deaths <- read_csv(file = "C:/Users/93217/Desktop/hu/time_series_covid_19_deaths.csv",
+                      col_types = cols(
+                        .default = col_double(),
+                        `Province/State` = col_character(),
+                        `Country/Region` = col_character()
+                      ))
+
+codes <- read_csv('https://raw.githubusercontent.com/plotly/datasets/master/2014_world_gdp_with_codes.csv',
+                  col_types = cols(
+                    COUNTRY = col_character(),
+                    `GDP (BILLIONS)` = col_double(),
+                    CODE = col_character()
+                  ))
+ts_confirmed <- ts_confirmed %>%
+  gather("Date", "Confirmed", -c("Province/State", "Country/Region", "Lat", "Long")) %>%
+  mutate(Date = as.Date(Date, "%m/%d/%y"))
+
+ts_recovered <- ts_recovered %>%
+  gather("Date", "Recovered", -c("Province/State", "Country/Region", "Lat", "Long")) %>%
+  mutate(Date = as.Date(Date, "%m/%d/%y"))
+
+ts_deaths <- ts_deaths %>%
+  gather("Date", "Deaths", -c("Province/State", "Country/Region", "Lat", "Long")) %>%
+  mutate(Date = as.Date(Date, "%m/%d/%y"))
+## Incorporate datasets
+
+ts_total <- ts_confirmed %>%
+  left_join(ts_deaths) %>%
+  left_join(ts_recovered) %>%
+  mutate(Recovered = replace_na(Recovered, replace = 0))
+
+## We all know "Diamond Princess" and "MS Zaandam" are cruises, So we have to remove them from the data
+
+ts_total <- ts_total %>%
+  filter(`Country/Region` != "Diamond Princess") %>%
+  filter(`Country/Region` != "MS Zaandam")
+
+ts_total$Deaths[is.na(ts_total$Deaths)] <- 0
+
+## Created a dataset including latest news of COVID-19
+
+cases_latest <- ts_total %>%
+  group_by(`Country/Region`, Date) %>%
+  summarise(Confirmed  = sum(Confirmed),
+            Recovered = sum(Recovered),
+            Deaths = sum(Deaths)) %>%
+  mutate("New Cases" = Confirmed - lag(Confirmed, 1) ) %>%
+  filter(Date == max(Date))
+
+codes <- codes %>%
+  select(COUNTRY, CODE) %>%
+  rename(Region = COUNTRY ,
+         Code = CODE) %>%
+  rownames_to_column("id")
+
+codes$id <- as.integer(codes$id)
+
+## Making sure countries's and regions' names are in line with other datasets.
+
+codes$Region <- codes$Region %>%
+  str_replace(pattern = "United States", replacement = "US") %>%
+  str_replace(pattern = "Macedonia", replacement = "North Macedonia") %>%
+  str_replace(pattern = "Czech Republic", replacement = "Czechia") %>%
+  str_replace(pattern = "Taiwan", replacement = "Taiwan*") %>%
+  str_replace(pattern = "West Bank", replacement = "West Bank and Gaza") %>%
+  str_replace(pattern = "Congo, Democratic Republic of the", replacement = "Congo (Kinshasa)") %>%
+  str_replace(pattern = "Congo, Republic of the", replacement = "Congo (Brazzaville)") %>%
+  str_replace(pattern = "Bahamas, The", replacement = "Bahamas") %>%
+  str_replace(pattern = "Swaziland", replacement = "Eswatini") %>%
+  str_replace(pattern = "Gambia, The", replacement = "Gambia")
+
+cases_latest_codes <- cases_latest %>%
+  left_join(codes, by = c("Country/Region" = "Region" )) %>%
+  arrange(desc(Confirmed))
+
+## Setting boundries' color as light grey
+
+line <- list(color = toRGB("#d1d1d1"), width = 0.2)
+
+## Specifing parameters of the 3D map
+geo <- list(
+  showframe = FALSE,
+  showcoastlines = FALSE,
+  projection = list(type = 'orthographic'),
+  resolution = '100',
+  showcountries = TRUE,
+  countrycolor = '#d1d1d1',
+  showocean = TRUE,
+  oceancolor = '#064273',
+  showlakes = TRUE,
+  lakecolor = '#99c0db',
+  showrivers = TRUE,
+  rivercolor = '#99c0db',
+  bgcolor = '#e8f7fc')
+plot_geo() %>%
+  layout(geo = geo,
+         paper_bgcolor = '#e8f7fc',
+         title = paste0("World COVID-19 Confirmed by Region at", day_latest)) %>%
+  add_trace(data = cases_latest_codes,
+            z = ~Confirmed,
+            colors = "Reds",
+            text = ~'Country/Region',
+            locations = ~Code,
+            marker = list(line = line))
+```
+
+---
+
+The interactive 3D global map shows us vividly thoes who are suffering the most. You can rotate it to see the whole picture.
+
+### Search by Country/Region
+```{r , echo=FALSE}
+cases_latest_codes %>%
+  select(`Country/Region`,Code, Date, Confirmed, `New Cases`, Recovered, Deaths) %>%
+  arrange(desc(Confirmed)) %>%
+  datatable(
+    rownames = FALSE,
+    fillContainer = TRUE,
+    options = list(
+      bPaginate = FALSE)
+  )
+```
+
+---
+
+Page 3 spread {data-icon="fa-ghost"}
+======================================
+### COVID-19’s spread all the world,Total cases by date
+---
+```{r,echo=FALSE}
+cases_all <- cases_total_date %>%
+  select(-Confirmed, -New_Cases) %>%
+  gather("Status", "Cases", -"Date")
+
+barchart <- ggplot(data = cases_total_date, aes(x = Date)) +
+  geom_bar(aes(y = Confirmed), position = "stack", stat = "identity", fill = "#ff5050") +
+  geom_bar(data = cases_all, aes(y = Cases, fill = Status), position = "stack", stat = "identity") +
+  scale_fill_manual(values = c("#000000", "#009900")) +
+  scale_y_continuous(breaks = seq(0, 21000000, by = 1000000), labels = comma) +
+  theme_solarized(base_size = 10, light = TRUE)+
+  theme(plot.margin = margin(0, 0, 0, 0, "pt"),
+        panel.background = element_rect(fill = "White"),
+        legend.position = "bottom",
+        axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks = element_blank()) +
+  ggtitle("World COVID-19 Total Cases by Day")
+
+ggplotly(barchart) %>%
+  layout(legend = list(orientation = 'h'))
+```
+
+---
+
+Over time, both mortality and survival rates increase.
+
+Page 4  Mortality rate and recovery rate {data-icon="fa-ghost"}
+======================================
+### Mortality rate and recovery rate
+---
+```{r,echo=FALSE}
+cases_total_date <- cases_total_date %>%
+  group_by(Date, Confirmed) %>%
+  mutate(Mortality_rate = Deaths / Confirmed,
+         Recovery_rate = Recovered / Confirmed) %>%
+  ungroup()
+barchart_1 <-cases_total_date %>%
+  select(Date, Mortality_rate, Recovery_rate) %>%
+  gather(status.ratio, ratio, -Date ) %>%
+  ggplot(aes(x = Date, y = ratio, fill = status.ratio)) +
+  geom_bar(stat = "identity", position = "dodge") +
+    theme(plot.margin = margin(0, 0, 0, 0, "pt"),
+          panel.background = element_rect(fill = "White"),
+          legend.position = "bottom",
+          axis.title = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks = element_blank()) +
+    ggtitle("The Mortality_rate and the Recovery_rate")
+
+ggplotly(barchart_1) %>%
+layout(legend = list(orientation = 'h'))
+```
+
+---
+
+We can see the mortality rate is incresing slowly but steadily, which can’t be a good sign. The recovery rate, however is unstable by the time, but we can see it has been going up obviously from April.
+
+Page 5  Mortality rate and recovery rate {data-icon="fa-key"}
+======================================
+### Mortality rate and recovery rate
+---
+```{r,echo=FALSE}
+cases_total_date %>%
+  select(-Date) %>%
+  na.omit() %>%
+  cor(use = "pairwise.complete.obs") %>%
+  corrplot.mixed(tl.col = "black", tl.pos = "d", tl.cex = 0.7, cl.cex = 0.7,
+                  number.cex = 0.7)
+
+```
+
+The mortality rate and recovery rate are not related, but are related to new cases, indicating that the more cases there are, the more likely it is to be detrimental to recovery.
+
+Page 6  Top 10 countries/regions Confirmed {data-navmenu="different continents"}
+======================================
+### Top 10 countries/regions Confirmed
+---
+```{r,echo=FALSE}
+top_10_confirmed <- cases_latest %>%
+  select('Country/Region', Confirmed) %>%
+  arrange(desc(Confirmed))
+
+top_10_confirmed[1:10,] %>%
+  ggplot(aes(x = reorder(`Country/Region`,Confirmed), y = Confirmed )) +
+  geom_bar(stat = "identity", fill  = "red", width = 0.8) +
+  theme_economist() +
+  scale_y_continuous(breaks = seq(0, 5500000, by = 500000), labels = comma) +
+  coord_flip() +
+  labs(x = "", y = "", title = "Top 10 (the Most Confirmed Cases)") +
+  theme(axis.text.x = element_text(angle = 45)) +
+  theme(axis.title = element_text(size = 14, colour = "black"),
+        axis.text.y = element_text(size = 11, face = "bold"))
+
+```
+
+We can see that the US has the most confirmed cases and the Iran has the least. On the one hand, it indicates that the US has a high population density and a high disease transmission rate, but it also shows that the US medical system is developed and has the ability to detect viruses.
+
+Page 7  Top 10 countries/regions Deaths {data-navmenu="different continents"}
+======================================
+### Top 10 countries/regions Deaths
+---
+```{r,echo=FALSE}
+top_10_Deaths <- cases_latest %>%
+  select('Country/Region', Deaths) %>%
+  arrange(desc(Deaths))
+
+top_10_Deaths[1:10,] %>%
+  ggplot(aes(x = reorder(`Country/Region`,Deaths), y = Deaths )) +
+  geom_bar(stat = "identity", fill  = "blue", width = 0.8) +
+  theme_economist() +
+  scale_y_continuous(breaks = seq(0, 200000, by = 20000), labels = comma) +
+  coord_flip() +
+  labs(x = "", y = "", title = "Top 10 (the Most Deaths)") +
+  theme(axis.text.x = element_text(angle = 45)) +
+  theme(axis.title = element_text(size = 14, colour = "black"),
+        axis.text.y = element_text(size = 11, face = "bold"))
+```
+
+The death rate in the United States is also the highest, indicating that the public healthcare system in the United States is in crisis, resulting in many people dying without treatment.
+
+Page 8  Top 10 countries/regions Recovered {data-navmenu="different continents"}
+======================================
+### Top 10 countries/regions Recovered
+---
+```{r,echo=FALSE}
+top_10_Recovered <- cases_latest %>%
+    select('Country/Region', Recovered) %>%
+  arrange(desc(Recovered))
+
+top_10_Recovered[1:10,] %>%
+  ggplot(aes(x = reorder(`Country/Region`,Recovered), y = Recovered )) +
+  geom_bar(stat = "identity", fill  = "green", width = 0.8) +
+  theme_economist() +
+  scale_y_continuous(breaks = seq(0, 1800000, by = 200000), labels = comma) +
+  coord_flip() +
+  labs(x = "", y = "", title = "Top 10 (the Most Recovered)") +
+  theme(axis.text.x = element_text(angle = 45)) +
+  theme(axis.title = element_text(size = 14, colour = "black"),
+        axis.text.y = element_text(size = 11, face = "bold"))
+```
+
+From this graph, we can see that the mortality rate of Brazil is lower than that of the United States (the previous graph), and the recovery rate is higher than that of the United States. We can conclude that the medical level of Brazil is higher than that of the United States
+
+Page 9  Comparison between the recovery rate and mortality rate (Top 6) {data-icon="fa-virus"}
+======================================
+### Comparison between the recovery rate and mortality rate (Top 6)
+---
+```{r,echo=FALSE}
+top_6_affected <- ts_total %>%
+  select('Country/Region', Date, Confirmed, Deaths, Recovered) %>%
+  filter(`Country/Region` %in% c("US", "Spain", "Italy", "United Kingdom",
+                                 "Russia","France")) %>%
+  group_by(`Country/Region`, Date) %>%
+  summarise(Confirmed  = sum(Confirmed),
+            Recovered = sum(Recovered),
+            Deaths = sum(Deaths)) %>%
+  mutate("New_Cases" = Confirmed - lag(Confirmed, 1),
+         "Recovery_Rate" = Recovered / Confirmed ,
+         "Mortality_Rate" = Deaths / Confirmed) %>%
+  mutate("New_Cases" = round(New_Cases, 3),
+         "Recovery_Rate" = round(Recovery_Rate, 3),
+         "Mortality_Rate" = round(Mortality_Rate, 3))
+
+top_6_affected$New_Cases[is.na(top_6_affected$New_Cases)] <- 0
+top_6_affected$Recovery_Rate[is.nan(top_6_affected$Recovery_Rate)] <- 0
+top_6_affected$Mortality_Rate[is.nan(top_6_affected$Mortality_Rate)] <- 0
+top_6_affected %>%
+  rename(Names = 'Country/Region') %>%
+  ggplot(aes(x = Date, y = Recovery_Rate, group = Names )) +
+  theme_clean() +
+  geom_point(size = .5) +
+  geom_line(aes(color = Names), alpha = .9) +
+  scale_color_viridis(discrete = TRUE,  option = "B") +
+  labs(x = "", y= "", color = "", title = "Recovery Rate")
+```
+
+It seems like that all the others’ recovery rate have gradually been rising since March apart from UK’s recovery rate almost closing to zero from March.
+
+### Comparison between the recovery rate and mortality rate (Top 6)
+---
+```{r,echo=FALSE}
+top_6_affected %>%
+  rename(Names = 'Country/Region') %>%
+  ggplot(aes(x = Date, y = Mortality_Rate, fill = Names)) +
+  geom_bar(stat = "identity",alpha = 0.8) +
+  facet_wrap(~ Names) +
+  theme_minimal() +
+  labs(x = "", y = "Mortality Rate") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none",
+        axis.title.y = element_text(face = "bold", size = 10))
+```
+
+It clearly tells us all the six countries’ mortality rates go up roughly over time, although Russia didn’t show significant trend.
+
+Page 10  Take a look at my country(China) {data-navmenu="CHINA"}
+======================================
+### Take a look at my country(China)
+---
+```{r,echo=FALSE}
+China_mainland <- ts_confirmed %>%
+  left_join(ts_deaths) %>%
+  left_join(ts_recovered) %>%
+  mutate(Recovered = replace_na(Recovered, replace = 0)) %>%
+  rename(Province = "Province/State",
+         Country.region = "Country/Region") %>%
+  filter(Country.region == "China") %>%
+  filter(Province != "Hong Kong")
+
+China_mainland_all <-
+  China_mainland %>%
+  select(Province, Country.region, Confirmed, Deaths, Recovered, Date) %>%
+  group_by(Date) %>%
+  summarise(Confirmed = sum(Confirmed),
+            Deaths = sum(Deaths),
+            Recovered = sum(Recovered)) %>%
+  mutate(New_cases = Confirmed - lag(Confirmed, 1),
+            New_deaths = Deaths - lag(Deaths, 1),
+            Mortality_rate = Deaths / Confirmed,
+            Recovery_rate = Recovered / Confirmed)
+
+China_mainland_all$New_cases[is.na(China_mainland_all$New_cases)] <- 0
+China_mainland_all$New_deaths[is.na(China_mainland_all$New_deaths)] <- 0
+
+China_mainland_province <-
+  China_mainland %>%
+  select(Province, Country.region, Confirmed, Deaths, Recovered, Date) %>%
+  group_by(Province, Date) %>%
+  summarise(Confirmed  = sum(Confirmed),
+            Recovered = sum(Recovered),
+            Deaths = sum(Deaths)) %>%
+  mutate(New_cases = Confirmed - lag(Confirmed, 1),
+         New_deaths = Deaths - lag(Deaths, 1),
+         Mortality_rate = Deaths / Confirmed,
+         Recovery_rate = Recovered / Confirmed)
+
+China_mainland_province$New_cases[is.na(China_mainland_province$New_cases)] <- 0
+China_mainland_province$New_deaths[is.na(China_mainland_province$New_deaths)] <- 0
+China_mainland_province$Mortality_rate[is.na(China_mainland_province$Mortality_rate)] <- 0
+China_mainland_province$Recovery_rate[is.na(China_mainland_province$Recovery_rate)] <- 0
+datatable <- 
+China_mainland_province %>%
+  filter(Date == max(Date))
+  
+datatable %>%
+  select(Province, Date, Confirmed, Confirmed, Recovered, Deaths, New_cases) %>%
+  arrange(desc(Confirmed)) %>%
+  datatable(
+    rownames = FALSE,
+    fillContainer = TRUE,
+    options = list(
+      bPaginate = FALSE),
+    style = "bootstrap") %>%
+  formatStyle("Confirmed", background = styleColorBar(datatable$Confirmed, "red")) %>%
+  formatStyle("Recovered", background = styleColorBar(datatable$Recovered, "green")) %>%
+  formatStyle("Deaths", background = styleColorBar(datatable$Deaths, "yellow")) %>%
+  formatStyle("New_cases", background = styleColorBar(datatable$New_cases, "steelblue"))
+```
+
+Datatable for quick search of the provice you are interested in.
+
+Page 11  Confirmed cases {data-navmenu="CHINA"}
+======================================
+### Confirmed cases
+---
+```{r,echo=FALSE}
+p1 <-
+China_mainland_all %>% 
+  ggplot(aes(x = Date, y= Confirmed, fill = Confirmed)) +
+  geom_bar(stat = "identity") +
+  scale_fill_viridis(option = "D") +
+  labs(fill = "Confirmed", x = "", y = "") +
+  theme_dark() +
+  theme(legend.title = element_text(face = "bold")) 
+  
+ggplotly(p1)
+```
+
+We can see that the number of confirmed cases in China has been very slow since April, indicating that the epidemic has been controlled.
+
+Page 12  Deaths over time {data-navmenu="CHINA"}
+======================================
+### Deaths over time
+---
+```{r,echo=FALSE}
+P2 <- 
+China_mainland_all %>% 
+  ggplot(aes(x = Date, y= Deaths, fill = Deaths)) +
+  geom_bar(stat = "identity") +
+  scale_fill_viridis(option = "C") +
+  labs(fill = "Deaths", x = "", y = "") +
+  theme_dark() +
+  theme(legend.title = element_text(face = "bold")) 
+
+ggplotly(P2)
+```
+
+We can see that the number of deaths in China has not increased after April, indicating that the medical system has played a huge role.
+
+Page 13  Overall New cases / New deaths over time {data-navmenu="CHINA"}
+======================================
+### Overall New cases / New deaths over time
+---
+```{r,echo=FALSE}
+China_mainland_all %>% 
+  select(Date, New_cases, New_deaths) %>%
+  gather(status, cases, -Date) %>%
+  ggplot(aes(x = Date, y= cases, group = status)) +
+  geom_line(aes(color = status), size = 1.3) +
+  labs(color = "") +
+  theme_dark() +
+  theme(legend.position = "top")+
+  labs(x = "", y = "", fill = "")
+```
+
+We can see that the new cases are stabilizing.
+
+Page 14  Overall Mortality rate / Recovery Rate over time {data-navmenu="CHINA"}
+======================================
+### Overall Mortality rate / Recovery Rate over time
+---
+```{r,echo=FALSE}
+China_mainland_all %>% 
+  select(Date, Mortality_rate, Recovery_rate) %>%
+  gather(status, cases, -Date) %>%
+  ggplot(aes(x = Date, y= cases, group = status)) +
+  geom_line(aes(color = status), size = 1.3) +
+  labs(color = "") +
+  theme_dark() +
+  theme(legend.position = "top")+
+  labs(x = "", y = "", fill = "")
+```
+
+We can clearly see that the cure rate in China is very high, indicating that the government has made tremendous contributions.
+
+
+Page 15  Confirmed cases / Recovered Rate over time by province (Top 6) {data-navmenu="CHINA"}
+======================================
+### Confirmed cases / Recovered Rate over time by province (Top 6)
+---
+```{r,echo=FALSE}
+Top_6 <- 
+  China_mainland_province %>%
+  filter(Date == max(Date)) %>%
+  arrange(desc(Confirmed)) 
+Top_6 <- Top_6[1:6,]
+percent <- paste(Top_6$Province ,round(100*Top_6$Confirmed / sum(Top_6$Confirmed), 2), "%")
+Top_6_all <- China_mainland_province %>%
+  filter(Province == Top_6$Province)
+
+Top_6_all %>%
+  select(Province, Date, Confirmed, Recovered, Deaths) %>%
+  gather(status, cases, -c("Province", "Date")) %>%
+  ggplot()+
+  geom_line(aes(Date, cases, group = status, color = status), lwd = 1) +
+  labs(color = "") +
+  facet_wrap(~ Province, scales = "free") +
+  theme_fivethirtyeight() +
+  dark_mode(theme_fivethirtyeight())
+```
+
+We can see that no matter which city, there are almost no deaths, and the cure rate is almost equal to the number of confirmed cases, indicating that the virus has weakened its harm to people and the disease has been controlled.
+
+Page 16 conclusion {data-icon="fa-pen-fancy"}
+======================================
+In a word, here we analyzed the COVID-19 in different regions, and compared their mortality, recovery rate, and new number. We focused on the COVID-19 in China, and concluded that China has made great contributions in combating COVID-19.
+
+Thanks
+
+
+
+
